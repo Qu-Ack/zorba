@@ -21,7 +21,9 @@ import (
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
+	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 const (
@@ -34,15 +36,16 @@ const (
 var dockerCli *client.Client
 
 type Deployment struct {
-	ID            string
-	RepoURL       string
-	Branch        string
-	Subdomain     string
-	Type          string
-	Port          string
-	ContainerName string
-	ImageName     string
-	Env           map[string]string
+	DepID         primitive.ObjectID `bson:"_id"json:"depid"`
+	ID            string             `bson:"id" json:"id"`
+	RepoURL       string             `bson:"repo_url" json"repo_url"`
+	Branch        string             `bson:"branch" json:"branch"`
+	Subdomain     string             `bson:"subdomain" json:"subdomain"`
+	Type          string             `bson:"type" json:"type"`
+	Port          string             `bson:"port" json:"port"`
+	ContainerName string             `bson:"container_name" json:"container_name"`
+	ImageName     string             `bson:"image_name" json:"image_name"`
+	Env           map[string]string  `bson:"env" json:"env"`
 }
 
 type GitHubPayload struct {
@@ -63,20 +66,20 @@ func verifySignature(body []byte, signatureHeader string) bool {
 	return hmac.Equal([]byte(expectedSignature), []byte(signatureHeader))
 }
 
-func handleWebHook(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(r.Body)
+func (a apiConfig) handleWebHook(c *gin.Context) {
+	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
-		http.Error(w, "Unable to read body", http.StatusBadRequest)
+		http.Error(c.Writer, "Unable to read body", http.StatusBadRequest)
 		return
 	}
-	defer r.Body.Close()
+	defer c.Request.Body.Close()
 
-	eventType := r.Header.Get("x-github-event")
+	eventType := c.Request.Header.Get("x-github-event")
 	log.Printf("Received event: %s", eventType)
 
 	switch eventType {
 	case "push":
-		processPushEvent(body)
+		a.processPushEvent(body)
 	case "pull_request":
 		processPullRequestEvent(body)
 	default:
@@ -84,7 +87,7 @@ func handleWebHook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Respond with 200 OK
-	w.WriteHeader(http.StatusOK)
+	c.Writer.WriteHeader(200)
 }
 
 func findExistingContainer(repoURL, branch string) (string, error) {
@@ -131,11 +134,61 @@ func cleanupExistingDeployment(repoURL, branch string) error {
 }
 
 // processPushEvent handles push events
-func processPushEvent(body []byte) {
+func (c apiConfig) processPushEvent(body []byte) {
 	var payload GitHubPayload
 	if err := json.Unmarshal(body, &payload); err != nil {
 		log.Printf("Error parsing push event: %v", err)
 		return
+	}
+	hash := sha256.Sum256([]byte(payload.Repository.CloneURL + payload.Ref))
+	deploymentID := hex.EncodeToString(hash[:])[:12]
+	fmt.Println(payload)
+	dep, err := c.findDeploymentWithID(context.TODO(), deploymentID)
+
+	if err != nil {
+		panic("something wrong occured")
+	}
+
+	if dep != nil {
+
+		if err := cleanupExistingDeployment(dep.RepoURL, dep.Branch); err != nil {
+			log.Printf("Error cleaning up existing deployment: %v", err)
+		}
+
+		go safeDeploy(dep)
+
+	} else {
+
+		deployment := Deployment{
+			ID:            uuid.New().String(),
+			RepoURL:       payload.Repository.CloneURL,
+			Branch:        strings.TrimPrefix(payload.Ref, "refs/heads/"),
+			Subdomain:     fmt.Sprintf("%s.%s", generateSubdomain(), baseDomain),
+			Env:           make(map[string]string),
+			ContainerName: fmt.Sprintf("%s-%s", deploymentID, strings.ToLower(payload.Repository.CloneURL)),
+			ImageName:     fmt.Sprintf("%s-image", deploymentID),
+		}
+
+		dep, err := c.insertDeployment(context.TODO(), &deployment)
+
+		if err != nil {
+			panic("something wrong while inserting deployment")
+		}
+
+		if err := cleanupExistingDeployment(dep.RepoURL, dep.Branch); err != nil {
+			log.Printf("Error cleaning up existing deployment: %v", err)
+		}
+
+		go safeDeploy(dep)
+	}
+}
+
+func (c apiConfig) FirstTimeDeploy(ctx context.Context, body []byte, userId primitive.ObjectID) *Deployment {
+
+	var payload GitHubPayload
+	if err := json.Unmarshal(body, &payload); err != nil {
+		log.Printf("Error parsing push event: %v", err)
+		return nil
 	}
 	hash := sha256.Sum256([]byte(payload.Repository.CloneURL + payload.Ref))
 	deploymentID := hex.EncodeToString(hash[:])[:12]
@@ -150,14 +203,30 @@ func processPushEvent(body []byte) {
 		ImageName:     fmt.Sprintf("%s-image", deploymentID),
 	}
 
-	if err := cleanupExistingDeployment(deployment.RepoURL, deployment.Branch); err != nil {
+	dep, err := c.insertDeployment(context.TODO(), &deployment)
+
+	if err != nil {
+		log.Println(err)
+		panic("something wrong while inserting deployment")
+	}
+
+	err = c.addProject(ctx, dep.DepID, userId)
+
+	if err != nil {
+		log.Println(err)
+		panic("error while adding deployment to user")
+	}
+
+	if err := cleanupExistingDeployment(dep.RepoURL, dep.Branch); err != nil {
 		log.Printf("Error cleaning up existing deployment: %v", err)
 	}
 
-	go safeDeploy(deployment)
+	safeDeploy(dep)
+
+	return dep
 }
 
-func deployApplication(d Deployment) error {
+func deployApplication(d *Deployment) error {
 	log.Printf("Starting deployment %s for %s", d.ID, d.RepoURL)
 	defer func(start time.Time) {
 		log.Printf("Deployment %s completed in %v", d.ID, time.Since(start))
@@ -208,7 +277,7 @@ func dockerBuild(imageName, contextPath string) error {
 	return cmd.Run()
 }
 
-func dockerRun(imageName string, d Deployment) error {
+func dockerRun(imageName string, d *Deployment) error {
 
 	serviceName := d.ID + "-service"
 	routerName := d.ID + "-router"
@@ -303,7 +372,7 @@ func processPullRequestEvent(body []byte) {
 	}
 }
 
-func safeDeploy(deployment Deployment) {
+func safeDeploy(deployment *Deployment) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("PANIC in deployment %s: %v", deployment.ID, r)

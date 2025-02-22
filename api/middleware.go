@@ -1,11 +1,11 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 	"strings"
 
+	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
@@ -14,17 +14,18 @@ type contextKey string
 
 const userContextKey contextKey = "user"
 
-func AuthMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		authHeader := r.Header.Get("Authorization")
+// GinAuthMiddleware is the Gin version of your JWT middleware.
+func GinAuthMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		authHeader := c.GetHeader("Authorization")
 		if authHeader == "" {
-			http.Error(w, "Missing Authorization header", http.StatusUnauthorized)
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Missing Authorization header"})
 			return
 		}
 
 		parts := strings.SplitN(authHeader, " ", 2)
 		if len(parts) != 2 || parts[0] != "Bearer" {
-			http.Error(w, "Invalid Authorization header format", http.StatusUnauthorized)
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Invalid Authorization header format"})
 			return
 		}
 		tokenString := parts[1]
@@ -36,34 +37,41 @@ func AuthMiddleware(next http.Handler) http.Handler {
 			return []byte("tryandbruteforcethisbitch"), nil
 		})
 		if err != nil || !token.Valid {
-			http.Error(w, "Invalid or expired token", http.StatusUnauthorized)
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Invalid or expired token"})
 			return
 		}
 
 		claims, ok := token.Claims.(jwt.MapClaims)
 		if !ok {
-			http.Error(w, "Invalid token claims", http.StatusUnauthorized)
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Invalid token claims"})
 			return
 		}
 
-		idPrimitive, ok := claims["id"].(primitive.ObjectID)
+		// Extract the "id" claim as a string and convert to primitive.ObjectID.
+		idStr, ok := claims["id"].(string)
 		if !ok {
-			http.Error(w, "Invalid token id claim", http.StatusUnauthorized)
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Invalid token id claim"})
+			return
+		}
+		idPrimitive, err := primitive.ObjectIDFromHex(idStr)
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Invalid token id format"})
 			return
 		}
 
 		username, ok := claims["email"].(string)
 		if !ok {
-			http.Error(w, "Invalid token email claim", http.StatusUnauthorized)
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Invalid token email claim"})
 			return
 		}
 
+		// Store the user in Gin's context so that it can be accessed in the handler.
 		user := User{
 			ID:       idPrimitive,
 			Username: username,
 		}
+		c.Set("user", user)
 
-		ctx := context.WithValue(r.Context(), userContextKey, user)
-		next.ServeHTTP(w, r.WithContext(ctx))
-	})
+		c.Next()
+	}
 }

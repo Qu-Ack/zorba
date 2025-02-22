@@ -3,11 +3,13 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
 
 	"github.com/docker/docker/client"
+	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 	"go.mongodb.org/mongo-driver/mongo"
 )
@@ -17,59 +19,97 @@ type apiConfig struct {
 }
 
 func main() {
-
 	var err error
 
-	dockerCli, err = client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
-
+	// Initialize Docker client
+	dockerCli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
 		log.Fatalf("Failed to create Docker client: %v", err)
 	}
+	_ = dockerCli // Use dockerCli as needed
 
+	// Load environment variables
 	err = godotenv.Load(".env")
-
 	if err != nil {
-		panic("enviornment couldn't be initialized")
+		log.Fatalf("Environment variables couldn't be initialized: %v", err)
 	}
 
+	// Get PORT from environment (default to 8080 if not set)
 	PORT := os.Getenv("PORT")
-	client := ConnectDB()
+	if PORT == "" {
+		PORT = "8080"
+	}
 
+	// Connect to the database
+	clientDB := ConnectDB()
 	defer func() {
-		if err := client.Disconnect(context.TODO()); err != nil {
+		if err := clientDB.Disconnect(context.TODO()); err != nil {
 			panic(err)
 		}
 	}()
 
-	database := client.Database("zorba")
+	database := clientDB.Database("zorba")
 	config := apiConfig{
 		DB: database,
 	}
 
-	serveMux := http.NewServeMux()
+	// Initialize Gin router
+	router := gin.Default()
 
-	serveMux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
+	// CORS middleware
+	router.Use(func(c *gin.Context) {
+		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
+		c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		if c.Request.Method == http.MethodOptions {
+			c.AbortWithStatus(http.StatusOK)
+			return
+		}
+		c.Next()
 	})
 
-	serveMux.HandleFunc("POST /webhook", handleWebHook)
-	serveMux.HandleFunc("POST /deploy/go", handleDeployGo)
-	serveMux.Handle("POST /deploy/node", AuthMiddleware(http.HandlerFunc(config.handleDeployNode)))
-	serveMux.HandleFunc("POSt /deploy/react", handleDeployReact)
-	serveMux.HandleFunc("POST /login", config.handleLogin)
-	serveMux.HandleFunc("POST /signup", config.handleSignUp)
+	// Health check endpoint
+	router.GET("/health", func(c *gin.Context) {
+		c.String(http.StatusOK, "ok")
+	})
 
-	serveMux.Handle("/protected", AuthMiddleware(http.HandlerFunc(handleProtected)))
+	// Public endpoints
+	router.POST("/webhook", config.handleWebHook)
+	router.POST("/login", config.handleLogin)
+	router.POST("/signup", config.handleSignUp)
 
-	corsHandler := enableCORS(serveMux)
-	server := http.Server{
-		Addr:    fmt.Sprintf(":%v", PORT),
-		Handler: corsHandler,
+	// Protected routes (requires authentication)
+	authorized := router.Group("/")
+	authorized.Use(GinAuthMiddleware()) // This should be a Gin middleware
+	{
+		authorized.GET("/protected", handleProtected)
+		router.POST("/deploy", config.handleDeploy)
 	}
 
-	log.Println(fmt.Sprintf("{SERVER}: listening on %v", PORT))
-	server.ListenAndServe()
+	log.Printf("Server listening on port %s", PORT)
+	router.Run(fmt.Sprintf(":%s", PORT))
+}
+
+func (a apiConfig) handleDeploy(c *gin.Context) {
+	user, ok := c.Request.Context().Value(userContextKey).(User)
+	if !ok {
+		http.Error(c.Writer, "User not found in context", http.StatusUnauthorized)
+		return
+	}
+
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		http.Error(c.Writer, "Unable to read body", http.StatusBadRequest)
+		return
+	}
+	defer c.Request.Body.Close()
+
+	dep := a.FirstTimeDeploy(c.Request.Context(), body, user.ID)
+
+	c.JSON(200, gin.H{
+		"deployment": dep,
+	})
+
 }
 
 func enableCORS(next http.Handler) http.Handler {
@@ -88,12 +128,11 @@ func enableCORS(next http.Handler) http.Handler {
 	})
 }
 
-func handleProtected(w http.ResponseWriter, r *http.Request) {
-	user, ok := r.Context().Value(userContextKey).(User)
+func handleProtected(c *gin.Context) {
+	user, ok := c.Request.Context().Value(userContextKey).(User)
 	if !ok {
-		http.Error(w, "User not found in context", http.StatusUnauthorized)
+		http.Error(c.Writer, "User not found in context", http.StatusUnauthorized)
 		return
 	}
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(fmt.Sprintf("Hello, %s. You are authenticated!", user.Username)))
+	c.Writer.Write([]byte(fmt.Sprintf("you are authenticated %s", user.ID.Hex())))
 }

@@ -11,6 +11,7 @@ func (c apiConfig) createUser(username string, password string, ctx context.Cont
 	userCollection := c.DB.Collection("users")
 
 	user := User{
+		ID:       primitive.NewObjectID(),
 		Username: username,
 		Password: password,
 	}

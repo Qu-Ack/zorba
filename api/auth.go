@@ -1,91 +1,87 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 )
 
-func (c apiConfig) handleSignUp(w http.ResponseWriter, r *http.Request) {
-	type body struct {
+// handleSignUp converts your signup endpoint to Gin.
+func (c *apiConfig) handleSignUp(ctx *gin.Context) {
+	// Define a struct to match the expected JSON body.
+	var body struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
 	}
 
-	var b body
-
-	decoder := json.NewDecoder(r.Body)
-
-	err := decoder.Decode(&b)
-
-	if err != nil {
-		WriteJSONError(w, 500, "Error in reading body")
-		return
-	}
-	fmt.Print(b.Username)
-	fmt.Print(b.Password)
-	fmt.Print("user")
-
-	err = c.createUser(b.Username, b.Password, r.Context())
-
-	if err != nil {
-		WriteJSONError(w, 500, "Internal Server Error")
+	// Bind the JSON body to the struct.
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Error in reading body"})
 		return
 	}
 
-	WriteJSON(w, 201, map[string]string{"status": "success"})
+	// Optionally log the username and password.
+	fmt.Println(body.Username, body.Password)
+
+	// Call your createUser method using the context from the request.
+	if err := c.createUser(body.Username, body.Password, ctx.Request.Context()); err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Internal Server Error"})
+		return
+	}
+
+	ctx.JSON(http.StatusCreated, gin.H{"status": "success"})
 }
 
-func (c apiConfig) handleLogin(w http.ResponseWriter, r *http.Request) {
-	type body struct {
+// handleLogin converts your login endpoint to Gin.
+func (c *apiConfig) handleLogin(ctx *gin.Context) {
+	// Define a struct to match the expected JSON body.
+	var body struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
 	}
 
-	var b body
+	// Bind the JSON body to the struct.
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Error in reading body"})
+		return
+	}
 
-	decoder := json.NewDecoder(r.Body)
-
-	err := decoder.Decode(&b)
-
+	// Retrieve the user by email (or username).
+	user, err := c.getUserByEmail(body.Username, ctx.Request.Context())
 	if err != nil {
-		WriteJSONError(w, 500, "Error in reading body")
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "No User"})
 		return
 	}
 
-	user, err := c.getUserByEmail(b.Username, r.Context())
-
-	if err != nil {
-		WriteJSONError(w, 500, "No User")
+	// Check if the provided password matches.
+	if user.Password != body.Password {
+		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "wrong password"})
 		return
 	}
 
-	if user.Password != b.Password {
-		WriteJSONError(w, 401, "wrong password")
-		return
-	}
-
-	t := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+	// Create a new JWT token with claims.
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"exp":   time.Now().Add(time.Hour).Unix(),
 		"id":    user.ID,
 		"email": user.Username,
 	})
-	s, err := t.SignedString([]byte("tryandbruteforcethisbitch"))
 
+	// Sign the token using your secret.
+	tokenString, err := token.SignedString([]byte("tryandbruteforcethisbitch"))
 	if err != nil {
-		WriteJSONError(w, 500, "Internal Server Error")
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Internal Server Error"})
 		return
 	}
 
-	WriteJSON(w, 200, map[string]any{
-		"Token": s,
-		"User": map[string]any{
+	// Return the token and user information in the response.
+	ctx.JSON(http.StatusOK, gin.H{
+		"Token": tokenString,
+		"User": gin.H{
 			"ID":       user.ID,
 			"username": user.Username,
 		},
 	})
-
 }
