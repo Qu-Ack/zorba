@@ -143,45 +143,28 @@ func (c apiConfig) processPushEvent(body []byte) {
 	hash := sha256.Sum256([]byte(payload.Repository.CloneURL + payload.Ref))
 	deploymentID := hex.EncodeToString(hash[:])[:12]
 	fmt.Println(payload)
-	dep, err := c.findDeploymentWithID(context.TODO(), deploymentID)
+
+	deployment := Deployment{
+		ID:            uuid.New().String(),
+		RepoURL:       payload.Repository.CloneURL,
+		Branch:        strings.TrimPrefix(payload.Ref, "refs/heads/"),
+		Subdomain:     fmt.Sprintf("%s.%s", generateSubdomain(), baseDomain),
+		Env:           make(map[string]string),
+		ContainerName: fmt.Sprintf("%s-%s", deploymentID, strings.ToLower(payload.Repository.CloneURL)),
+		ImageName:     fmt.Sprintf("%s-image", deploymentID),
+	}
+
+	dep, err := c.insertDeployment(context.TODO(), &deployment)
 
 	if err != nil {
-		log.Println(err)
-		panic("something wrong occured")
+		panic("something wrong while inserting deployment")
 	}
 
-	if dep != nil {
-
-		if err := cleanupExistingDeployment(dep.RepoURL, dep.Branch); err != nil {
-			log.Printf("Error cleaning up existing deployment: %v", err)
-		}
-
-		go safeDeploy(dep)
-
-	} else {
-
-		deployment := Deployment{
-			ID:            uuid.New().String(),
-			RepoURL:       payload.Repository.CloneURL,
-			Branch:        strings.TrimPrefix(payload.Ref, "refs/heads/"),
-			Subdomain:     fmt.Sprintf("%s.%s", generateSubdomain(), baseDomain),
-			Env:           make(map[string]string),
-			ContainerName: fmt.Sprintf("%s-%s", deploymentID, strings.ToLower(payload.Repository.CloneURL)),
-			ImageName:     fmt.Sprintf("%s-image", deploymentID),
-		}
-
-		dep, err := c.insertDeployment(context.TODO(), &deployment)
-
-		if err != nil {
-			panic("something wrong while inserting deployment")
-		}
-
-		if err := cleanupExistingDeployment(dep.RepoURL, dep.Branch); err != nil {
-			log.Printf("Error cleaning up existing deployment: %v", err)
-		}
-
-		go safeDeploy(dep)
+	if err := cleanupExistingDeployment(dep.RepoURL, dep.Branch); err != nil {
+		log.Printf("Error cleaning up existing deployment: %v", err)
 	}
+
+	go safeDeploy(dep)
 }
 
 func (c apiConfig) FirstTimeDeploy(ctx context.Context, body []byte, userId primitive.ObjectID) *Deployment {
