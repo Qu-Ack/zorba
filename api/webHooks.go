@@ -155,14 +155,23 @@ func dockerBuild(imageName, contextPath string) error {
 }
 
 func dockerRun(imageName string, d Deployment) error {
+
+	serviceName := d.ID + "-service"
+	routerName := d.ID + "-router"
+
 	labels := map[string]string{
-		"traefik.enable":                                                      "true",
-		"traefik.http.routers." + d.ID + ".rule":                              fmt.Sprintf("Host(`%s`)", d.Subdomain),
-		"traefik.http.routers." + d.ID + ".entrypoints":                       "websecure",
-		"traefik.http.routers." + d.ID + ".tls":                               "true",
-		"traefik.http.routers." + d.ID + ".tls.certresolver":                  "letsencrypt",
-		"traefik.http.services." + d.ID + "-service.loadbalancer.server.port": "3000",
+		"traefik.enable": "true",
+
+		// Router configuration
+		"traefik.http.routers." + routerName + ".rule":             fmt.Sprintf("Host(`%s`)", d.Subdomain),
+		"traefik.http.routers." + routerName + ".entrypoints":      "websecure",
+		"traefik.http.routers." + routerName + ".tls.certresolver": "letsencrypt",
+		"traefik.http.routers." + routerName + ".service":          serviceName,
+
+		// Service configuration
+		"traefik.http.services." + serviceName + ".loadbalancer.server.port": "3000",
 	}
+
 	if d.Type == "node" {
 		labels["traefik.http.services."+d.ID+".loadbalancer.server.port"] = "3000"
 	} else {
