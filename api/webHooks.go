@@ -142,7 +142,6 @@ func (c apiConfig) processPushEvent(body []byte) {
 	}
 	hash := sha256.Sum256([]byte(payload.Repository.CloneURL + payload.Ref))
 	deploymentID := hex.EncodeToString(hash[:])[:12]
-	fmt.Println(payload)
 
 	deployment := Deployment{
 		ID:            uuid.New().String(),
@@ -154,17 +153,11 @@ func (c apiConfig) processPushEvent(body []byte) {
 		ImageName:     fmt.Sprintf("%s-image", deploymentID),
 	}
 
-	dep, err := c.insertDeployment(context.TODO(), &deployment)
-
-	if err != nil {
-		panic("something wrong while inserting deployment")
-	}
-
-	if err := cleanupExistingDeployment(dep.RepoURL, dep.Branch); err != nil {
+	if err := cleanupExistingDeployment(deployment.RepoURL, deployment.Branch); err != nil {
 		log.Printf("Error cleaning up existing deployment: %v", err)
 	}
 
-	go safeDeploy(dep)
+	go safeDeploy(deployment)
 }
 
 func (c apiConfig) FirstTimeDeploy(ctx context.Context, body []byte, userId primitive.ObjectID) *Deployment {
@@ -205,12 +198,12 @@ func (c apiConfig) FirstTimeDeploy(ctx context.Context, body []byte, userId prim
 		log.Printf("Error cleaning up existing deployment: %v", err)
 	}
 
-	safeDeploy(dep)
+	safeDeploy(*dep)
 
 	return dep
 }
 
-func deployApplication(d *Deployment) error {
+func deployApplication(d Deployment) error {
 	log.Printf("Starting deployment %s for %s", d.ID, d.RepoURL)
 	defer func(start time.Time) {
 		log.Printf("Deployment %s completed in %v", d.ID, time.Since(start))
@@ -261,7 +254,7 @@ func dockerBuild(imageName, contextPath string) error {
 	return cmd.Run()
 }
 
-func dockerRun(imageName string, d *Deployment) error {
+func dockerRun(imageName string, d Deployment) error {
 
 	serviceName := d.ID + "-service"
 	routerName := d.ID + "-router"
@@ -356,7 +349,7 @@ func processPullRequestEvent(body []byte) {
 	}
 }
 
-func safeDeploy(deployment *Deployment) {
+func safeDeploy(deployment Deployment) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("PANIC in deployment %s: %v", deployment.ID, r)
