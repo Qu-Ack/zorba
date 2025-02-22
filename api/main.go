@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/docker/docker/client"
 	"github.com/joho/godotenv"
 	"go.mongodb.org/mongo-driver/mongo"
 )
@@ -16,7 +17,16 @@ type apiConfig struct {
 }
 
 func main() {
-	err := godotenv.Load(".env")
+
+	var err error
+
+	dockerCli, err = client.NewClientWithOpts(client.FromEnv)
+
+	if err != nil {
+		log.Fatalf("Failed to create Docker client: %v", err)
+	}
+
+	err = godotenv.Load(".env")
 
 	if err != nil {
 		panic("enviornment couldn't be initialized")
