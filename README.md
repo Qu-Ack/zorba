@@ -7,6 +7,3 @@
 - the pricing would be a main component so we will keep indian pricing and reasonable pricing   
 
 
-### CURRENT GOAL
-
-- our goal would be to get our project working on a vps online with our domain
