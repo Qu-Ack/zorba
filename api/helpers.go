@@ -135,7 +135,23 @@ COPY package*.json ./
 RUN npm ci
 COPY . .
 RUN npm run build
-`
+FROM nginx:alpine
+COPY --from=builder /app/dist /usr/share/nginx/html
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]`
+
+		nginxConf := `server {
+    listen 80;
+    server_name localhost;
+    location / {
+        root /usr/share/nginx/html;
+        try_files $uri $uri/ /index.html;
+    }
+}`
+		if err := os.WriteFile(filepath.Join(projectPath, "nginx.conf"), []byte(nginxConf), 0644); err != nil {
+			return err
+		}
 
 	default:
 		return fmt.Errorf("unsupported project type: %s", projectType)
