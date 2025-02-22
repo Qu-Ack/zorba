@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
@@ -33,13 +34,15 @@ const (
 var dockerCli *client.Client
 
 type Deployment struct {
-	ID        string
-	RepoURL   string
-	Branch    string
-	Subdomain string
-	Type      string
-	Port      string
-	Env       map[string]string
+	ID            string
+	RepoURL       string
+	Branch        string
+	Subdomain     string
+	Type          string
+	Port          string
+	ContainerName string
+	ImageName     string
+	Env           map[string]string
 }
 
 type GitHubPayload struct {
@@ -84,6 +87,51 @@ func handleWebHook(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+func findExistingContainer(repoURL, branch string) (string, error) {
+	containers, err := dockerCli.ContainerList(context.Background(), container.ListOptions{All: true})
+	if err != nil {
+		return "", err
+	}
+
+	for _, container := range containers {
+		if container.Labels["com.deployer.repo"] == repoURL &&
+			container.Labels["com.deployer.branch"] == branch {
+			return container.ID, nil
+		}
+	}
+	return "", nil
+}
+
+func cleanupExistingDeployment(repoURL, branch string) error {
+	containerID, err := findExistingContainer(repoURL, branch)
+	if err != nil {
+		return err
+	}
+	if containerID == "" {
+		return nil
+	}
+	// Stop and remove the existing container
+	timeout := int(time.Second * 30)
+	if err := dockerCli.ContainerStop(context.Background(), containerID, container.StopOptions{Timeout: &timeout}); err != nil {
+		return err
+	}
+
+	if err := dockerCli.ContainerRemove(context.Background(), containerID, container.RemoveOptions{}); err != nil {
+		return err
+	}
+
+	// Inspect the container to get its image name
+	ctr, err := dockerCli.ContainerInspect(context.Background(), containerID)
+	if err != nil {
+		return err
+	}
+	imageName := ctr.Config.Image
+
+	// Remove the old image
+	_, err = dockerCli.ImageRemove(context.Background(), imageName, image.RemoveOptions{})
+	return err
+}
+
 // processPushEvent handles push events
 func processPushEvent(body []byte) {
 	var payload GitHubPayload
@@ -91,13 +139,21 @@ func processPushEvent(body []byte) {
 		log.Printf("Error parsing push event: %v", err)
 		return
 	}
+	hash := sha256.Sum256([]byte(payload.Repository.CloneURL + payload.Ref))
+	deploymentID := hex.EncodeToString(hash[:])[:12]
 
 	deployment := Deployment{
-		ID:        uuid.New().String(),
-		RepoURL:   payload.Repository.CloneURL,
-		Branch:    strings.TrimPrefix(payload.Ref, "refs/heads/"),
-		Subdomain: fmt.Sprintf("%s.%s", generateSubdomain(), baseDomain),
-		Env:       make(map[string]string),
+		ID:            uuid.New().String(),
+		RepoURL:       payload.Repository.CloneURL,
+		Branch:        strings.TrimPrefix(payload.Ref, "refs/heads/"),
+		Subdomain:     fmt.Sprintf("%s.%s", generateSubdomain(), baseDomain),
+		Env:           make(map[string]string),
+		ContainerName: fmt.Sprintf("%s-%s", deploymentID, strings.ToLower(payload.Repository.CloneURL)),
+		ImageName:     fmt.Sprintf("%s-image", deploymentID),
+	}
+
+	if err := cleanupExistingDeployment(deployment.RepoURL, deployment.Branch); err != nil {
+		log.Printf("Error cleaning up existing deployment: %v", err)
 	}
 
 	go safeDeploy(deployment)
@@ -160,9 +216,10 @@ func dockerRun(imageName string, d Deployment) error {
 	routerName := d.ID + "-router"
 
 	labels := map[string]string{
-		"traefik.enable": "true",
+		"com.deployer.repo":   d.RepoURL,
+		"com.deployer.branch": d.Branch,
+		"traefik.enable":      "true",
 
-		// Router configuration
 		"traefik.http.routers." + routerName + ".rule":             fmt.Sprintf("Host(`%s`)", d.Subdomain),
 		"traefik.http.routers." + routerName + ".entrypoints":      "websecure",
 		"traefik.http.routers." + routerName + ".tls.certresolver": "letsencrypt",
@@ -182,7 +239,7 @@ func dockerRun(imageName string, d Deployment) error {
 	resp, err := dockerCli.ContainerCreate(
 		context.Background(),
 		&container.Config{
-			Image:  imageName,
+			Image:  d.ImageName,
 			Labels: labels,
 			ExposedPorts: nat.PortSet{
 				"3000/tcp": struct{}{},
@@ -215,7 +272,7 @@ func dockerRun(imageName string, d Deployment) error {
 	}
 
 	log.Printf("Container %s started successfully", resp.ID)
-	log.Printf("http://%s.deploy.dakshsangal.xyz", d.ID)
+	log.Printf("http://%s.deploy.dakshsangal.xyz", d.Subdomain)
 	return err
 }
 
