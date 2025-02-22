@@ -146,37 +146,24 @@ COPY --from=builder /app/dist /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/
 
 # Add healthcheck
-HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
-    CMD wget --spider http://localhost:80 || exit 1
-
+HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=3 \
+    CMD curl -f http://127.0.0.1:80/health || exit 1
 EXPOSE 80
 CMD ["nginx", "-g", "daemon off;"]`
 		nginxConf := `server {
-    listen 80;
-    server_name _;
+    listen 80 default_server;  # Changed from 'localhost'
+    server_name _;  # Catch-all instead of localhost
     
-    # Security headers
-    add_header X-Frame-Options "SAMEORIGIN";
-    add_header X-Content-Type-Options "nosniff";
-    add_header X-XSS-Protection "1; mode=block";
-    
-    # Gzip compression
-    gzip on;
-    gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript;
-
     location / {
         root /usr/share/nginx/html;
         try_files $uri $uri/ /index.html;
-        
-        # Cache control
-        location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg)$ {
-            expires 1y;
-            add_header Cache-Control "public, immutable";
-        }
     }
 
-    access_log /dev/stdout;
-    error_log /dev/stderr;
+    # Add health check endpoint
+    location /health {
+        return 200 'OK';
+        add_header Content-Type text/plain;
+    }
 }`
 
 		if err := os.WriteFile(filepath.Join(projectPath, "nginx.conf"), []byte(nginxConf), 0644); err != nil {
