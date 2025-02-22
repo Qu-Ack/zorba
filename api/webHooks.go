@@ -230,9 +230,9 @@ func dockerRun(imageName string, d Deployment) error {
 	labels["traefik.http.services."+serviceName+".loadbalancer.passhostheader"] = "true"
 
 	if d.Type == "node" {
-		labels["traefik.http.services."+d.ID+".loadbalancer.server.port"] = "3000"
+		labels["traefik.http.services."+serviceName+".loadbalancer.server.port"] = "3000"
 	} else {
-		labels["traefik.http.services."+d.ID+".loadbalancer.server.port"] = "80"
+		labels["traefik.http.services."+serviceName+".loadbalancer.server.port"] = "80"
 	}
 
 	log.Println("creating container...")
