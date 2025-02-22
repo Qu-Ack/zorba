@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
@@ -82,6 +83,7 @@ func handleWebHook(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+// processPushEvent handles push events
 func processPushEvent(body []byte) {
 	var payload GitHubPayload
 	if err := json.Unmarshal(body, &payload); err != nil {
@@ -101,12 +103,22 @@ func processPushEvent(body []byte) {
 }
 
 func deployApplication(d Deployment) error {
-	projectPath := filepath.Join(projectsDir, d.ID)
+	log.Printf("Starting deployment %s for %s", d.ID, d.RepoURL)
+	defer func(start time.Time) {
+		log.Printf("Deployment %s completed in %v", d.ID, time.Since(start))
+	}(time.Now())
 
+	projectPath := filepath.Join(projectsDir, d.ID)
+	log.Printf("Project path: %s", projectPath)
+
+	// Add logging to each step
+	log.Println("Cloning repository...")
 	if err := gitClone(d.RepoURL, d.Branch, projectPath); err != nil {
-		return fmt.Errorf("git clone failed: %v", err)
+		log.Printf("Clone failed: %v", err)
+		return err
 	}
 
+	log.Println("Detecting project type...")
 	if d.Type == "" {
 		detectedType, err := detectProjectType(projectPath)
 		if err != nil {
@@ -129,6 +141,7 @@ func deployApplication(d Deployment) error {
 	return dockerRun(imageName, d)
 }
 
+// Helper functions
 func generateSubdomain() string {
 	return strings.Replace(uuid.New().String()[:8], "-", "", -1)
 }
@@ -153,7 +166,8 @@ func dockerRun(imageName string, d Deployment) error {
 		labels["traefik.http.services."+d.ID+".loadbalancer.server.port"] = "80"
 	}
 
-	_, err := dockerCli.ContainerCreate(
+	log.Println("creating container...")
+	resp, err := dockerCli.ContainerCreate(
 		context.Background(),
 		&container.Config{
 			Image:  imageName,
@@ -171,6 +185,21 @@ func dockerRun(imageName string, d Deployment) error {
 		d.ID,
 	)
 
+	if err != nil {
+		log.Printf("container creation failed", err)
+	}
+
+	log.Printf("Starting container %s", resp.ID)
+	if err := dockerCli.ContainerStart(
+		context.Background(),
+		resp.ID,
+		container.StartOptions{},
+	); err != nil {
+		log.Printf("Container start failed: %v", err)
+		return err
+	}
+
+	log.Printf("Container %s started successfully", resp.ID)
 	return err
 }
 
