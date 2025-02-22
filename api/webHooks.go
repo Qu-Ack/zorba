@@ -19,6 +19,7 @@ import (
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
+	"github.com/docker/go-connections/nat"
 	"github.com/google/uuid"
 )
 
@@ -155,11 +156,13 @@ func dockerBuild(imageName, contextPath string) error {
 
 func dockerRun(imageName string, d Deployment) error {
 	labels := map[string]string{
-		"traefik.enable":                                     "true",
-		"traefik.http.routers." + d.ID + ".rule":             fmt.Sprintf("Host(`%s`)", d.Subdomain),
-		"traefik.http.routers." + d.ID + ".tls.certresolver": "letsencrypt",
+		"traefik.enable":                                                      "true",
+		"traefik.http.routers." + d.ID + ".rule":                              fmt.Sprintf("Host(`%s`)", d.Subdomain),
+		"traefik.http.routers." + d.ID + ".entrypoints":                       "websecure",
+		"traefik.http.routers." + d.ID + ".tls":                               "true",
+		"traefik.http.routers." + d.ID + ".tls.certresolver":                  "letsencrypt",
+		"traefik.http.services." + d.ID + "-service.loadbalancer.server.port": "3000",
 	}
-
 	if d.Type == "node" {
 		labels["traefik.http.services."+d.ID+".loadbalancer.server.port"] = "3000"
 	} else {
@@ -172,6 +175,9 @@ func dockerRun(imageName string, d Deployment) error {
 		&container.Config{
 			Image:  imageName,
 			Labels: labels,
+			ExposedPorts: nat.PortSet{
+				"3000/tcp": struct{}{},
+			},
 		},
 		&container.HostConfig{
 			RestartPolicy: container.RestartPolicy{Name: "unless-stopped"},
