@@ -200,6 +200,7 @@ func dockerRun(imageName string, d Deployment) error {
 	}
 
 	log.Printf("Container %s started successfully", resp.ID)
+	log.Printf("http://%s.deploy.dakshsangal.xyz", d.ID)
 	return err
 }
 
