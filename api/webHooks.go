@@ -67,14 +67,14 @@ func verifySignature(body []byte, signatureHeader string) bool {
 }
 
 func (a apiConfig) handleWebHook(c *gin.Context) {
-	body, err := io.ReadAll(c.Request.Body)
+	// Use Gin's helper to get the raw body data.
+	body, err := c.GetRawData()
 	if err != nil {
-		http.Error(c.Writer, "Unable to read body", http.StatusBadRequest)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Unable to read body"})
 		return
 	}
-	defer c.Request.Body.Close()
 
-	eventType := c.Request.Header.Get("x-github-event")
+	eventType := c.GetHeader("x-github-event")
 	log.Printf("Received event: %s", eventType)
 
 	switch eventType {
@@ -86,10 +86,9 @@ func (a apiConfig) handleWebHook(c *gin.Context) {
 		log.Printf("Unhandled event type: %s", eventType)
 	}
 
-	// Respond with 200 OK
-	c.Writer.WriteHeader(200)
+	// Respond with 200 OK using Gin's method.
+	c.Status(http.StatusOK)
 }
-
 func findExistingContainer(repoURL, branch string) (string, error) {
 	containers, err := dockerCli.ContainerList(context.Background(), container.ListOptions{All: true})
 	if err != nil {
