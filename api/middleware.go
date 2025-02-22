@@ -70,6 +70,8 @@ func GinAuthMiddleware() gin.HandlerFunc {
 			ID:       idPrimitive,
 			Username: username,
 		}
+
+		fmt.Println(user)
 		c.Set("user", user)
 
 		c.Next()

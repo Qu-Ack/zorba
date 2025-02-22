@@ -146,6 +146,7 @@ func (c apiConfig) processPushEvent(body []byte) {
 	dep, err := c.findDeploymentWithID(context.TODO(), deploymentID)
 
 	if err != nil {
+		log.Println(err)
 		panic("something wrong occured")
 	}
 
