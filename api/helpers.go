@@ -132,23 +132,53 @@ CMD ["node", "src/index.js"]`
 FROM node:18-alpine AS builder
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci
+RUN npm ci --silent
 COPY . .
-RUN npm run build
+RUN npm run build || (echo "Build failed!" && exit 1)
+
+# Production stage
 FROM nginx:alpine
+
+# Remove default nginx config
+RUN rm -rf /etc/nginx/conf.d/*
+
 COPY --from=builder /app/dist /usr/share/nginx/html
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY nginx.conf /etc/nginx/conf.d/
+
+# Add healthcheck
+HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
+    CMD wget --spider http://localhost:80 || exit 1
+
 EXPOSE 80
 CMD ["nginx", "-g", "daemon off;"]`
-
 		nginxConf := `server {
     listen 80;
-    server_name localhost;
+    server_name _;
+    
+    # Security headers
+    add_header X-Frame-Options "SAMEORIGIN";
+    add_header X-Content-Type-Options "nosniff";
+    add_header X-XSS-Protection "1; mode=block";
+    
+    # Gzip compression
+    gzip on;
+    gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript;
+
     location / {
         root /usr/share/nginx/html;
         try_files $uri $uri/ /index.html;
+        
+        # Cache control
+        location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg)$ {
+            expires 1y;
+            add_header Cache-Control "public, immutable";
+        }
     }
+
+    access_log /dev/stdout;
+    error_log /dev/stderr;
 }`
+
 		if err := os.WriteFile(filepath.Join(projectPath, "nginx.conf"), []byte(nginxConf), 0644); err != nil {
 			return err
 		}

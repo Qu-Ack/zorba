@@ -223,6 +223,10 @@ func dockerRun(imageName string, d Deployment) error {
 		"traefik.http.routers." + routerName + ".tls.certresolver": "letsencrypt",
 		"traefik.http.routers." + routerName + ".service":          serviceName,
 
+		"traefik.http.routers." + routerName + ".middlewares":                                        "spa-headers,compression",
+		"traefik.http.middlewares.spa-headers.headers.customresponseheaders.Content-Security-Policy": "default-src 'self'",
+		"traefik.http.middlewares.compression.compress":                                              "true",
+
 		// Service configuration
 		"traefik.http.services." + serviceName + ".loadbalancer.server.port": "3000",
 	}
