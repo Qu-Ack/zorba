@@ -214,22 +214,17 @@ func dockerRun(imageName string, d Deployment) error {
 	routerName := d.ID + "-router"
 
 	labels := map[string]string{
-		"com.deployer.repo":   d.RepoURL,
-		"com.deployer.branch": d.Branch,
-		"traefik.enable":      "true",
-
-		"traefik.http.routers." + routerName + ".rule":             fmt.Sprintf("Host(`%s`)", d.Subdomain),
-		"traefik.http.routers." + routerName + ".entrypoints":      "websecure",
-		"traefik.http.routers." + routerName + ".tls.certresolver": "letsencrypt",
-		"traefik.http.routers." + routerName + ".service":          serviceName,
-
-		"traefik.http.routers." + routerName + ".middlewares":                                        "spa-headers,compression",
-		"traefik.http.middlewares.spa-headers.headers.customresponseheaders.Content-Security-Policy": "default-src 'self'",
-		"traefik.http.middlewares.compression.compress":                                              "true",
-
-		// Service configuration
-		"traefik.http.services." + serviceName + ".loadbalancer.server.port": "3000",
-	}
+		"com.deployer.repo":                                                     d.RepoURL,
+		"com.deployer.branch":                                                   d.Branch,
+		"traefik.enable":                                                        "true",
+		"traefik.http.routers." + routerName + ".rule":                          fmt.Sprintf("Host(`%s`)", d.Subdomain),
+		"traefik.http.routers." + routerName + ".entrypoints":                   "websecure",
+		"traefik.http.routers." + routerName + ".tls":                           "true",
+		"traefik.http.routers." + routerName + ".tls.certresolver":              "letsencrypt",
+		"traefik.http.routers." + routerName + ".service":                       serviceName,
+		"traefik.http.services." + serviceName + ".loadbalancer.server.port":    "80",
+		"traefik.http.middlewares." + serviceName + "-spa.stripprefix.prefixes": "/",
+		"traefik.http.routers." + routerName + ".middlewares":                   serviceName + "-spa,compression"}
 
 	labels["traefik.http.services."+serviceName+".loadbalancer.server.scheme"] = "http"
 	labels["traefik.http.services."+serviceName+".loadbalancer.passhostheader"] = "true"
