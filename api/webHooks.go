@@ -104,12 +104,10 @@ func findExistingContainer(repoURL, branch string) (string, error) {
 
 func cleanupExistingDeployment(repoURL, branch string) error {
 	containerID, err := findExistingContainer(repoURL, branch)
-	if err != nil {
+	if err != nil || containerID == "" {
 		return err
 	}
-	if containerID == "" {
-		return nil
-	}
+
 	// Stop and remove the existing container
 	timeout := int(time.Second * 30)
 	if err := dockerCli.ContainerStop(context.Background(), containerID, container.StopOptions{Timeout: &timeout}); err != nil {
@@ -239,7 +237,7 @@ func dockerRun(imageName string, d Deployment) error {
 	resp, err := dockerCli.ContainerCreate(
 		context.Background(),
 		&container.Config{
-			Image:  d.ImageName,
+			Image:  imageName,
 			Labels: labels,
 			ExposedPorts: nat.PortSet{
 				"3000/tcp": struct{}{},
