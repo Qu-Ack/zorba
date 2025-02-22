@@ -83,7 +83,7 @@ func main() {
 	authorized.Use(GinAuthMiddleware()) // This should be a Gin middleware
 	{
 		authorized.GET("/protected", handleProtected)
-		router.POST("/deploy", config.handleDeploy)
+		authorized.POST("/deploy", config.handleDeploy)
 	}
 
 	log.Printf("Server listening on port %s", PORT)
@@ -91,9 +91,14 @@ func main() {
 }
 
 func (a apiConfig) handleDeploy(c *gin.Context) {
-	user, ok := c.Request.Context().Value(userContextKey).(User)
+	userInterface, exists := c.Get("user")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User not found in context"})
+		return
+	}
+	user, ok := userInterface.(User)
 	if !ok {
-		http.Error(c.Writer, "User not found in context", http.StatusUnauthorized)
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid user type in context"})
 		return
 	}
 
